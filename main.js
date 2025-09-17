@@ -1,7 +1,10 @@
 import { Actor } from 'apify';
 import * as cheerio from 'cheerio';
 import { gotScraping } from 'got-scraping';
-import playwright from 'playwright';
+import { chromium } from 'playwright-extra';
+import stealthPlugin from 'playwright-extra-plugin-stealth';
+
+chromium.use(stealthPlugin());
 
 Actor.main(async () => {
     const { company_name, maxReviews = 20 } = await Actor.getInput();
@@ -10,7 +13,11 @@ Actor.main(async () => {
     }
 
     const reviews = [];
-    const proxyConfiguration = await Actor.createProxyConfiguration();
+    // Using RESIDENTIAL proxy group is more expensive but much harder to block.
+    // Cheaper DATACENTER proxies are often blocked by sites like G2.
+    const proxyConfiguration = await Actor.createProxyConfiguration({
+        groups: ['RESIDENTIAL'],
+    });
     const proxyUrl = proxyConfiguration ? await proxyConfiguration.newUrl() : undefined;
     let page = 1;
     let totalCollected = 0;
@@ -45,22 +52,44 @@ Actor.main(async () => {
 
             // Playwright fallback on first page only
             if (page === 1) {
-                const browser = await playwright.chromium.launch({ args: ['--no-sandbox','--disable-dev-shm-usage'] });
-                const context = await browser.newContext({ proxy: proxyUrl ? { server: proxyUrl } : undefined });
+                const browser = await chromium.launch({
+                    headless: true,
+                    args: ['--no-sandbox', '--disable-dev-shm-usage'],
+                });
+                const context = await browser.newContext({
+                    proxy: proxyUrl ? { server: proxyUrl } : undefined,
+                    userAgent: response.request.options.headers['user-agent'], // Use same user-agent
+                });
                 const pageObj = await context.newPage();
-                await pageObj.route('**/*', route => {
+                await pageObj.route('**/*', (route) => {
                     const req = route.request();
-                    const headers = { ...req.headers(), 'Referer': `https://www.g2.com/products/${company_name}` };
+                    // Keep consistent headers
+                    const headers = {
+                        ...req.headers(),
+                        'referer': `https://www.g2.com/products/${company_name}`,
+                        'upgrade-insecure-requests': '1',
+                        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                        'accept-language': 'en-US,en;q=0.9',
+                    };
                     route.continue({ headers });
                 });
-                const resp = await pageObj.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-                if (resp && resp.status() === 200) {
-                    await pageObj.waitForTimeout(1500);
-                    html = await pageObj.content();
-                } else {
-                    await pageObj.screenshot({ path: `proxy_fallback_${company_name}.png` });
+
+                try {
+                    const resp = await pageObj.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 });
+                    if (resp && resp.status() === 200) {
+                        await pageObj.waitForTimeout(2000); // Small wait for any JS rendering
+                        html = await pageObj.content();
+                    } else {
+                        const screenshot = await pageObj.screenshot();
+                        await Actor.setValue(`FALLBACK_FAILED_${company_name}.png`, screenshot, { contentType: 'image/png' });
+                    }
+                } catch (e) {
+                    console.log(`Playwright fallback failed: ${e.message}`);
+                    const screenshot = await pageObj.screenshot();
+                    await Actor.setValue(`FALLBACK_ERROR_${company_name}.png`, screenshot, { contentType: 'image/png' });
+                } finally {
+                    await browser.close();
                 }
-                await browser.close();
             } else {
                 break;
             }
