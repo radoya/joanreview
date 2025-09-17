@@ -69,7 +69,7 @@ Actor.main(async () => {
             preNavigationHooks: [
                 async ({ page }) => {
                     // Remove automation indicators
-                    await page.evaluateOnNewDocument(() => {
+                    await page.addInitScript(() => {
                         Object.defineProperty(navigator, 'webdriver', {
                             get: () => undefined,
                         });
