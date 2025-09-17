@@ -8,19 +8,15 @@ Actor.main(async () => {
 
     const startUrl = `https://www.g2.com/products/${company_name}/reviews`;
 
-    // Use Apify Proxy in AUTO mode (Datacenter by default unless overridden in run settings)
-    const proxyConfiguration = await Actor.createProxyConfiguration();
+    const proxyConfiguration = await Actor.createProxyConfiguration({
+        groups: ['RESIDENTIAL'],
+        countryCode: 'US',
+    });
 
     const reviews = [];
     let totalCollected = 0;
     let page = 1;
     let hasMore = true;
-
-    const userAgents = [
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0'
-    ];
 
     while (totalCollected < maxReviews && hasMore) {
         const url = `${startUrl}?page=${page}`;
@@ -29,70 +25,29 @@ Actor.main(async () => {
         log.info(`Fetching ${url}`);
         let html = '';
         try {
-            const ua = userAgents[page % userAgents.length];
             const response = await gotScraping({
                 url,
                 proxyUrl,
                 timeout: { request: 45000 },
                 retry: { limit: 2 },
                 http2: false,
+                headerGeneratorOptions: {
+                    browsers: [{ name: 'chrome', minVersion: 120 }],
+                    devices: ['desktop'],
+                    operatingSystems: ['windows', 'macos'],
+                },
                 headers: {
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
                     'Accept-Language': 'en-US,en;q=0.9',
                     'Upgrade-Insecure-Requests': '1',
                     'Referer': `https://www.g2.com/products/${company_name}`,
-                    'User-Agent': ua,
                 },
             });
 
             if (response.statusCode !== 200) {
                 log.warning(`Non-200 (${response.statusCode}) for ${url}`);
                 if (page === 1) await Actor.setValue(`ERROR_PAGE_${company_name}_p${page}`, response.body, { contentType: 'text/html' });
-                // Fallback to JSON endpoint
-                const jsonUrl = `https://www.g2.com/products/${company_name}/reviews.json?page=${page}`;
-                log.info(`Trying JSON fallback: ${jsonUrl}`);
-                const jsonResp = await gotScraping({
-                    url: jsonUrl,
-                    proxyUrl,
-                    timeout: { request: 30000 },
-                    headers: {
-                        'Accept': 'application/json',
-                        'User-Agent': ua,
-                        'Referer': startUrl,
-                    },
-                    responseType: 'json',
-                });
-
-                if (jsonResp.statusCode !== 200 || !Array.isArray(jsonResp.body.reviews)) {
-                    log.warning(`JSON fallback failed with ${jsonResp.statusCode}`);
-                    break;
-                }
-
-                const jsonReviews = jsonResp.body.reviews;
-                for (const rev of jsonReviews) {
-                    if (totalCollected >= maxReviews) break;
-                    reviews.push({
-                        review_id: rev.id,
-                        review_title: rev.title,
-                        review_content: rev.comment_text,
-                        review_question_answers: rev.review_answers.map(qa => ({ question: qa.question_text, answer: qa.answer_text })),
-                        review_rating: rev.rating,
-                        reviewer: {
-                            reviewer_name: rev.user_name,
-                            reviewer_job_title: rev.user_job_title,
-                            reviewer_link: rev.user_link ? `https://www.g2.com${rev.user_link}` : null,
-                        },
-                        publish_date: rev.submitted_at,
-                        reviewer_company_size: rev.company_segment,
-                        video_link: rev.video_url,
-                        review_link: rev.public_url ? `https://www.g2.com${rev.public_url}` : null,
-                    });
-                    totalCollected++;
-                }
-
-                if (jsonResp.body.total_pages <= page) hasMore = false;
-                page++;
-                continue;
+                break;
             }
             html = response.body;
         } catch (err) {
