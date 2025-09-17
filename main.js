@@ -17,6 +17,7 @@ Actor.main(async () => {
     // Cheaper DATACENTER proxies are often blocked by sites like G2.
     const proxyConfiguration = await Actor.createProxyConfiguration({
         groups: ['RESIDENTIAL'],
+        countryCode: 'US', // Specify proxy country for consistency
     });
     const proxyUrl = proxyConfiguration ? await proxyConfiguration.newUrl() : undefined;
     let page = 1;
@@ -60,6 +61,7 @@ Actor.main(async () => {
                 const context = await browser.newContext({
                     proxy: proxyUrl ? { server: proxyUrl } : undefined,
                     userAgent: response.request.options.headers['user-agent'], // Use same user-agent
+                    viewport: { width: 1920, height: 1080 }, // Use a realistic viewport
                 });
                 const pageObj = await context.newPage();
                 await pageObj.route('**/*', (route) => {
@@ -76,18 +78,23 @@ Actor.main(async () => {
                 });
 
                 try {
-                    const resp = await pageObj.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 });
+                    const resp = await pageObj.goto(url, { waitUntil: 'load', timeout: 90000 });
                     if (resp && resp.status() === 200) {
-                        await pageObj.waitForTimeout(2000); // Small wait for any JS rendering
+                        // Wait for the actual review content to appear instead of a generic timeout
+                        await pageObj.waitForSelector('[data-test="review-card"]', { timeout: 20000 });
                         html = await pageObj.content();
                     } else {
-                        const screenshot = await pageObj.screenshot();
-                        await Actor.setValue(`FALLBACK_FAILED_${company_name}.png`, screenshot, { contentType: 'image/png' });
+                        const screenshot = await pageObj.screenshot({ fullPage: true });
+                        await Actor.setValue(`FALLBACK_FAILED_${company_name}_status_${resp?.status()}.png`, screenshot, { contentType: 'image/png' });
                     }
                 } catch (e) {
                     console.log(`Playwright fallback failed: ${e.message}`);
-                    const screenshot = await pageObj.screenshot();
-                    await Actor.setValue(`FALLBACK_ERROR_${company_name}.png`, screenshot, { contentType: 'image/png' });
+                    try {
+                        const screenshot = await pageObj.screenshot({ fullPage: true, timeout: 20000 });
+                        await Actor.setValue(`FALLBACK_ERROR_${company_name}.png`, screenshot, { contentType: 'image/png' });
+                    } catch (screenshotError) {
+                        console.log(`Screenshot failed: ${screenshotError.message}`);
+                    }
                 } finally {
                     await browser.close();
                 }
