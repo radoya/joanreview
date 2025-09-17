@@ -3,6 +3,7 @@
     "title": "Joan Review",
     "description": "Scrapes reviews from G2 for a given company and returns structured JSON.",
     "version": "1.0",
+    "dockerfile": "./Dockerfile",
     "input": "./input_schema.json",
     "readme": "./README.md"
   }
