@@ -8,10 +8,8 @@ Actor.main(async () => {
 
     const startUrl = `https://www.g2.com/products/${company_name}/reviews`;
 
-    const proxyConfiguration = await Actor.createProxyConfiguration({
-        groups: ['RESIDENTIAL'],
-        countryCode: 'US',
-    });
+    // Use Apify Proxy in AUTO mode (Datacenter by default unless overridden in run settings)
+    const proxyConfiguration = await Actor.createProxyConfiguration();
 
     const reviews = [];
     let totalCollected = 0;
