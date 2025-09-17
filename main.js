@@ -1,10 +1,5 @@
 import { Actor } from 'apify';
-import * as cheerio from 'cheerio';
 import { gotScraping } from 'got-scraping';
-import { chromium } from 'playwright-extra';
-import stealthPlugin from 'puppeteer-extra-plugin-stealth';
-
-chromium.use(stealthPlugin());
 
 Actor.main(async () => {
     const { company_name, maxReviews = 20 } = await Actor.getInput();
@@ -13,164 +8,81 @@ Actor.main(async () => {
     }
 
     const reviews = [];
-    // Using RESIDENTIAL proxy group is more expensive but much harder to block.
-    // Cheaper DATACENTER proxies are often blocked by sites like G2.
-    const proxyConfiguration = await Actor.createProxyConfiguration({
-        groups: ['RESIDENTIAL'],
-        countryCode: 'US', // Specify proxy country for consistency
-    });
-    const proxyUrl = proxyConfiguration ? await proxyConfiguration.newUrl() : undefined;
     let page = 1;
     let totalCollected = 0;
     let hasMore = true;
 
+    // Use a residential proxy for the best chance of success
+    const proxyConfiguration = await Actor.createProxyConfiguration({
+        groups: ['RESIDENTIAL'],
+        countryCode: 'US',
+    });
+    const proxyUrl = await proxyConfiguration.newUrl();
+
     while (totalCollected < maxReviews && hasMore) {
-        const url = `https://www.g2.com/products/${company_name}/reviews?page=${page}`;
-        const response = await gotScraping({
-            url,
-            proxyUrl,
-            http2: false, // Disable HTTP/2 to avoid some anti-bot triggers
-            retry: { limit: 3 }, // Retry on failures
-            timeout: { request: 30000 },
-            headerGeneratorOptions: {
-                browsers: [
-                    { name: 'chrome', minVersion: 120 },
-                ],
-                devices: ['desktop'],
-                operatingSystems: ['macos'],
-            },
-            headers: {
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Referer': `https://www.g2.com/products/${company_name}`,
-                'Upgrade-Insecure-Requests': '1',
-            },
-        });
+        // This is an internal API endpoint G2 uses to load reviews dynamically.
+        // It's more stable than scraping the HTML page.
+        const url = `https://www.g2.com/products/${company_name}/reviews.json?page=${page}`;
 
-        let html = response.body;
-        if (response.statusCode !== 200) {
-            await Actor.setValue(`ERROR_PAGE_${company_name}_p${page}`, response.body, { contentType: 'text/html' });
-            console.log(`Request failed ${response.statusCode} for ${url}`);
+        try {
+            const response = await gotScraping({
+                url,
+                proxyUrl,
+                responseType: 'json',
+                headers: {
+                    'Accept': 'application/json, text/plain, */*',
+                    'Referer': `https://www.g2.com/products/${company_name}/reviews`,
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                },
+            });
 
-            // Playwright fallback on first page only
-            if (page === 1) {
-                const browser = await chromium.launch({
-                    headless: true,
-                    args: ['--no-sandbox', '--disable-dev-shm-usage'],
-                });
-                const context = await browser.newContext({
-                    proxy: proxyUrl ? { server: proxyUrl } : undefined,
-                    userAgent: response.request.options.headers['user-agent'], // Use same user-agent
-                    viewport: { width: 1920, height: 1080 }, // Use a realistic viewport
-                });
-                const pageObj = await context.newPage();
-                await pageObj.route('**/*', (route) => {
-                    const req = route.request();
-                    // Keep consistent headers
-                    const headers = {
-                        ...req.headers(),
-                        'referer': `https://www.g2.com/products/${company_name}`,
-                        'upgrade-insecure-requests': '1',
-                        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                        'accept-language': 'en-US,en;q=0.9',
-                    };
-                    route.continue({ headers });
-                });
+            const { reviews: pageReviews, total_pages } = response.body;
 
-                try {
-                    const resp = await pageObj.goto(url, { waitUntil: 'load', timeout: 90000 });
-                    if (resp && resp.status() === 200) {
-                        // Wait for the actual review content to appear instead of a generic timeout
-                        await pageObj.waitForSelector('[data-test="review-card"]', { timeout: 20000 });
-                        html = await pageObj.content();
-                    } else {
-                        const screenshot = await pageObj.screenshot({ fullPage: true });
-                        await Actor.setValue(`FALLBACK_FAILED_${company_name}_status_${resp?.status()}.png`, screenshot, { contentType: 'image/png' });
-                    }
-                } catch (e) {
-                    console.log(`Playwright fallback failed: ${e.message}`);
-                    try {
-                        const screenshot = await pageObj.screenshot({ fullPage: true, timeout: 20000 });
-                        await Actor.setValue(`FALLBACK_ERROR_${company_name}.png`, screenshot, { contentType: 'image/png' });
-                    } catch (screenshotError) {
-                        console.log(`Screenshot failed: ${screenshotError.message}`);
-                    }
-                } finally {
-                    await browser.close();
-                }
-            } else {
+            if (!pageReviews || pageReviews.length === 0) {
+                hasMore = false;
                 break;
             }
-        }
 
-        const $ = cheerio.load(html);
+            for (const review of pageReviews) {
+                if (totalCollected >= maxReviews) break;
 
-        const reviewCards = $('[data-test="review-card"]');
-        if (reviewCards.length === 0) {
-            if (page === 1) {
-                await Actor.setValue(`EMPTY_PAGE_${company_name}_p${page}`, html, { contentType: 'text/html' });
-                console.log(`No review cards found on first page: ${url}`);
+                const reviewData = {
+                    review_id: review.id,
+                    review_title: review.title,
+                    review_content: review.comment_text,
+                    review_question_answers: review.review_answers?.map(qa => ({
+                        question: qa.question_text,
+                        answer: qa.answer_text,
+                    })) || [],
+                    review_rating: review.rating,
+                    reviewer: {
+                        reviewer_name: review.user_name,
+                        reviewer_job_title: review.user_job_title,
+                        reviewer_link: review.user_link ? `https://www.g2.com${review.user_link}` : null,
+                    },
+                    publish_date: review.submitted_at,
+                    reviewer_company_size: review.company_segment,
+                    video_link: review.video_url,
+                    review_link: review.public_url ? `https://www.g2.com${review.public_url}` : null,
+                };
+
+                reviews.push(reviewData);
+                totalCollected++;
             }
-            hasMore = false;
+
+            if (page >= total_pages) {
+                hasMore = false;
+            }
+
+            page++;
+        } catch (error) {
+            console.log(`Failed to fetch reviews from API: ${error.message}`);
+            if (error.response) {
+                console.log(`Status Code: ${error.response.statusCode}`);
+                console.log(`Response Body: ${JSON.stringify(error.response.body)}`);
+            }
             break;
         }
-
-        reviewCards.each((_, el) => {
-            if (totalCollected >= maxReviews) return;
-
-            // Review ID from review link
-            const reviewLink = $(el).find('a[data-test="review-card-link"]').attr('href');
-            const reviewIdMatch = reviewLink ? reviewLink.match(/-(\d+)$/) : null;
-            const review_id = reviewIdMatch ? Number(reviewIdMatch[1]) : null;
-
-            // Review metadata
-            const review_title = $(el).find('[data-test="review-card-title"]').text().trim();
-            const review_content = $(el).find('[data-test="review-card-content"]').text().trim();
-            const review_rating = Number($(el).find('[data-test="star-rating"]').attr('data-rating')) || null;
-            const publish_date = $(el).find('time').attr('datetime');
-
-            // Reviewer details
-            const reviewer_name = $(el).find('[data-test="reviewer-display-name"]').text().trim();
-            const reviewer_job_title = $(el).find('[data-test="reviewer-job-title"]').text().trim();
-            const reviewer_link = $(el).find('[data-test="reviewer-display-name"]').attr('href')
-                ? `https://www.g2.com${$(el).find('[data-test="reviewer-display-name"]').attr('href')}`
-                : null;
-            const reviewer_company_size = $(el).find('[data-test="reviewer-company-size"]').text().trim() || null;
-
-            // Review Q&A (best/dislike/problems solved)
-            const review_question_answers = [];
-            $(el).find('[data-test="review-answer"]').each((_, qa) => {
-                const question = $(qa).find('[data-test="review-question"]').text().trim();
-                const answer = $(qa).find('[data-test="review-text"]').text().trim();
-                if (question && answer) {
-                    review_question_answers.push({ question, answer });
-                }
-            });
-
-            // Video link (optional)
-            const video_link = $(el).find('a[data-test="review-video-link"]').attr('href') || null;
-
-            reviews.push({
-                review_id,
-                review_title,
-                review_content,
-                review_question_answers,
-                review_rating,
-                reviewer: {
-                    reviewer_name,
-                    reviewer_job_title: reviewer_job_title || null,
-                    reviewer_link,
-                },
-                publish_date,
-                reviewer_company_size,
-                video_link,
-                review_link: reviewLink ? `https://www.g2.com${reviewLink}` : null,
-            });
-
-            totalCollected++;
-        });
-
-        page++;
     }
 
     await Actor.pushData(reviews);
