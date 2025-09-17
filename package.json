@@ -10,7 +10,7 @@
     "dependencies": {
       "apify": "^3.0.0",
       "cheerio": "^1.0.0-rc.12",
-      "node-fetch": "^3.3.2"
+      "got-scraping": "^4.0.6"
     }
   }
   

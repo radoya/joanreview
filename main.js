@@ -1,6 +1,6 @@
 import { Actor } from 'apify';
 import * as cheerio from 'cheerio';
-import fetch from 'node-fetch';
+import { gotScraping } from 'got-scraping';
 
 Actor.main(async () => {
     const { company_name, maxReviews = 20 } = await Actor.getInput();
@@ -9,33 +9,42 @@ Actor.main(async () => {
     }
 
     const reviews = [];
+    const proxyConfiguration = await Actor.newProxyConfiguration();
+    const proxyUrl = proxyConfiguration ? await proxyConfiguration.newUrl() : undefined;
     let page = 1;
     let totalCollected = 0;
     let hasMore = true;
 
     while (totalCollected < maxReviews && hasMore) {
         const url = `https://www.g2.com/products/${company_name}/reviews?page=${page}`;
-        const response = await fetch(url, {
+        const response = await gotScraping({
+            url,
+            proxyUrl,
+            http2: true,
+            timeout: { request: 30000 },
+            headerGeneratorOptions: {
+                browsers: [
+                    { name: 'chrome', minVersion: 120 },
+                ],
+                devices: ['desktop'],
+                operatingSystems: ['macos'],
+            },
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9',
                 'Referer': `https://www.g2.com/products/${company_name}`,
                 'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Site': 'same-origin',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Dest': 'document',
             },
         });
 
-        if (!response.ok) {
-            const body = await response.text();
+        if (response.statusCode !== 200) {
+            const body = response.body;
             await Actor.setValue(`ERROR_PAGE_${company_name}_p${page}`, body, { contentType: 'text/html' });
-            console.log(`Request failed ${response.status} for ${url}`);
+            console.log(`Request failed ${response.statusCode} for ${url}`);
             break;
         }
 
-        const html = await response.text();
+        const html = response.body;
         const $ = cheerio.load(html);
 
         const reviewCards = $('[data-test="review-card"]');
