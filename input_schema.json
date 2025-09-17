@@ -16,32 +16,6 @@
         "default": 20,
         "minimum": 1,
         "maximum": 1000
-      },
-      "use_api_wrapper": {
-        "title": "Use API Wrapper",
-        "type": "boolean",
-        "description": "Fetch reviews via an API wrapper service instead of scraping",
-        "default": false
-      },
-      "api_url_template": {
-        "title": "API URL Template",
-        "type": "string",
-        "description": "Template for wrapper endpoint, e.g. https://api.example.com/g2/{product}/reviews?page={page}&limit={limit}",
-        "editor": "textfield"
-      },
-      "api_key": {
-        "title": "API Key (optional)",
-        "type": "string",
-        "description": "Key for the wrapper service. Sent as Authorization: Bearer and x-api-key.",
-        "editor": "textfield"
-      },
-      "pageSize": {
-        "title": "Page Size (API)",
-        "type": "integer",
-        "description": "Number of reviews per API page (wrapper mode)",
-        "default": 50,
-        "minimum": 1,
-        "maximum": 200
       }
     },
     "required": ["company_name"]
