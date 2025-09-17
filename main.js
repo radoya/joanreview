@@ -47,7 +47,6 @@ Actor.main(async () => {
             requestHandlerTimeoutSecs: 180,
             maxConcurrency: 1,
             maxRequestRetries: 5,
-            useIncognitoPages: true,
             sessionPoolOptions: {
                 maxPoolSize: 1,
                 sessionOptions: {
