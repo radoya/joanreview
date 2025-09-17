@@ -48,7 +48,9 @@ Actor.main(async () => {
             maxConcurrency: 1,
             sessionPoolOptions: {
                 maxPoolSize: 1,
-                sessionRotationCount: 3,
+                sessionOptions: {
+                    maxUsageCount: 3,
+                },
             },
             launchContext: {
                 launchOptions: {
