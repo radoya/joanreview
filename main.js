@@ -45,6 +45,16 @@ Actor.main(async () => {
                 ],
             },
         },
+        browserPoolOptions: {
+            useFingerprints: true, // Enable fingerprinting
+            fingerprintOptions: {
+                fingerprintGeneratorOptions: {
+                    browsers: ['chrome'],
+                    devices: ['desktop'],
+                    operatingSystems: ['windows', 'macos'],
+                },
+            },
+        },
         preNavigationHooks: [async ({ page, request, session }) => {
             // Set realistic viewport
             await page.setViewportSize({ 
@@ -52,8 +62,12 @@ Actor.main(async () => {
                 height: 1080 
             });
 
-            // Remove webdriver detection
-            await page.evaluateOnNewDocument(() => {
+            // Random delay to appear more human-like
+            await sleep(Math.random() * 3000 + 2000);
+        }],
+        postNavigationHooks: [async ({ page }) => {
+            // Remove webdriver detection - using Playwright's addInitScript
+            await page.addInitScript(() => {
                 Object.defineProperty(navigator, 'webdriver', { get: () => false });
                 Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
                 Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
@@ -64,27 +78,8 @@ Actor.main(async () => {
                     })
                 });
             });
-
-            // Set proper headers
-            await page.setExtraHTTPHeaders({
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache',
-                'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-                'Sec-Ch-Ua-Mobile': '?0',
-                'Sec-Ch-Ua-Platform': '"Windows"',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
-                'Upgrade-Insecure-Requests': '1',
-            });
-
-            // Random delay to appear more human-like
-            await sleep(Math.random() * 3000 + 2000);
         }],
+        postNavigationHooks: [async ({ page }) => {
         requestHandler: async ({ page, request, session, crawler }) => {
             const url = request.url;
             log.info(`Opening ${url}`);
