@@ -79,7 +79,6 @@ Actor.main(async () => {
                 });
             });
         }],
-        postNavigationHooks: [async ({ page }) => {
         requestHandler: async ({ page, request, session, crawler }) => {
             const url = request.url;
             log.info(`Opening ${url}`);
