@@ -1,16 +1,9 @@
 {
-    "name": "joanreview",
-    "version": "1.0.0",
-    "description": "Apify Actor for scraping G2 reviews for a company.",
-    "main": "main.js",
-    "type": "module",
-    "scripts": {
-      "start": "node main.js"
-    },
-    "dependencies": {
-      "apify": "^3.0.0",
-      "cheerio": "^1.0.0-rc.12",
-      "got-scraping": "^4.0.6"
-    }
+  "dependencies": {
+    "apify": "^3.4.5",
+    "crawlee": "^3.14.1",
+    "playwright": "^1.40.0",
+    "got-scraping": "^3.2.15",
+    "cheerio": "^1.0.0-rc.12"
   }
-  
+}
