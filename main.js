@@ -1,6 +1,7 @@
 import { Actor } from 'apify';
 import * as cheerio from 'cheerio';
 import { gotScraping } from 'got-scraping';
+import playwright from 'playwright';
 
 Actor.main(async () => {
     const { company_name, maxReviews = 20 } = await Actor.getInput();
@@ -37,14 +38,34 @@ Actor.main(async () => {
             },
         });
 
+        let html = response.body;
         if (response.statusCode !== 200) {
-            const body = response.body;
-            await Actor.setValue(`ERROR_PAGE_${company_name}_p${page}`, body, { contentType: 'text/html' });
+            await Actor.setValue(`ERROR_PAGE_${company_name}_p${page}`, response.body, { contentType: 'text/html' });
             console.log(`Request failed ${response.statusCode} for ${url}`);
-            break;
+
+            // Playwright fallback on first page only
+            if (page === 1) {
+                const browser = await playwright.chromium.launch({ args: ['--no-sandbox','--disable-dev-shm-usage'] });
+                const context = await browser.newContext({ proxy: proxyUrl ? { server: proxyUrl } : undefined });
+                const pageObj = await context.newPage();
+                await pageObj.route('**/*', route => {
+                    const req = route.request();
+                    const headers = { ...req.headers(), 'Referer': `https://www.g2.com/products/${company_name}` };
+                    route.continue({ headers });
+                });
+                const resp = await pageObj.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+                if (resp && resp.status() === 200) {
+                    await pageObj.waitForTimeout(1500);
+                    html = await pageObj.content();
+                } else {
+                    await pageObj.screenshot({ path: `proxy_fallback_${company_name}.png` });
+                }
+                await browser.close();
+            } else {
+                break;
+            }
         }
 
-        const html = response.body;
         const $ = cheerio.load(html);
 
         const reviewCards = $('[data-test="review-card"]');
