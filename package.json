@@ -5,14 +5,12 @@
     "main": "main.js",
     "type": "module",
     "scripts": {
-      "start": "node main.js",
-      "postinstall": "npx playwright install chromium"
+      "start": "node main.js"
     },
     "dependencies": {
       "apify": "^3.0.0",
       "cheerio": "^1.0.0-rc.12",
-      "got-scraping": "^4.0.6",
-      "playwright": "^1.47.0"
+      "got-scraping": "^4.0.6"
     }
   }
   

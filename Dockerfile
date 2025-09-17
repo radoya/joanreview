@@ -1,13 +1,13 @@
-FROM apify/actor-node-playwright:20
+FROM apify/actor-node:20
 
-# Copy package.json and package-lock.json (if available)
+# Copy package manifests and install production deps
 COPY package*.json ./
+RUN npm --quiet set progress=false \
+    && npm install --omit=dev --omit=optional \
+    && (npm list --omit=dev --all || true)
 
-# Install dependencies
-RUN npm install
+# Copy source
+COPY . ./
 
-# Copy the rest of the source files
-COPY . .
-
-# Set the command to run your actor
-CMD ["npm", "start"]
+# Start the actor
+CMD npm start --silent
