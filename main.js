@@ -46,6 +46,8 @@ Actor.main(async () => {
             navigationTimeoutSecs: 90,
             requestHandlerTimeoutSecs: 180,
             maxConcurrency: 1,
+            maxRequestRetries: 5,
+            useIncognitoPages: true,
             sessionPoolOptions: {
                 maxPoolSize: 1,
                 sessionOptions: {
@@ -55,6 +57,7 @@ Actor.main(async () => {
             launchContext: {
                 launchOptions: {
                     headless: true,
+                    channel: 'chrome',
                     args: [
                         '--disable-blink-features=AutomationControlled',
                         '--disable-features=site-per-process',
@@ -73,35 +76,23 @@ Actor.main(async () => {
                         Object.defineProperty(navigator, 'webdriver', {
                             get: () => undefined,
                         });
-                        
-                        // Override chrome detection
-                        window.chrome = {
-                            runtime: {},
-                            loadTimes: function() {},
-                            csi: function() {}
-                        };
-                        
-                        // Override permissions
+                        window.chrome = { runtime: {}, loadTimes() {}, csi() {} };
                         const originalQuery = window.navigator.permissions.query;
                         window.navigator.permissions.query = (parameters) => (
                             parameters.name === 'notifications' ?
                                 Promise.resolve({ state: Notification.permission }) :
                                 originalQuery(parameters)
                         );
-                        
-                        // Override plugins
-                        Object.defineProperty(navigator, 'plugins', {
-                            get: () => [1, 2, 3, 4, 5],
-                        });
+                        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
                     });
-                    
-                    // Set realistic viewport
+
+                    // Realistic UA and viewport
+                    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36');
                     await page.setViewportSize({ 
                         width: 1366 + Math.floor(Math.random() * 200), 
                         height: 768 + Math.floor(Math.random() * 200) 
                     });
-                    
-                    // Set extra headers
+
                     await page.setExtraHTTPHeaders({
                         'Accept-Language': 'en-US,en;q=0.9',
                         'Accept-Encoding': 'gzip, deflate, br',
