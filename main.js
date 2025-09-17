@@ -1,49 +1,30 @@
 import { Actor, log } from 'apify';
+import { PlaywrightCrawler, Configuration } from 'crawlee';
+
+// Configure Crawlee
+Configuration.set('memoryMbytes', 4096);
+Configuration.set('systemInfoIntervalMillis', 60000);
 
 Actor.main(async () => {
     try {
         log.info('Actor starting...');
         
         const input = await Actor.getInput();
-        log.info('Input received:', input);
-        
         if (!input) {
             throw new Error('No input provided to the actor');
         }
         
         const { company_name, maxReviews = 20 } = input;
-        
         if (!company_name) {
             throw new Error('You must provide "company_name" input!');
         }
         
         log.info(`Starting scrape for company: ${company_name}, max reviews: ${maxReviews}`);
         
-        // Import dependencies
-        log.info('Loading dependencies...');
-        
-        let gotScraping, cheerio;
-        
-        try {
-            const gotScrapingModule = await import('got-scraping');
-            gotScraping = gotScrapingModule.gotScraping;
-            log.info('got-scraping loaded successfully');
-        } catch (err) {
-            log.error('Failed to load got-scraping:', err.message);
-            throw err;
-        }
-        
-        try {
-            cheerio = await import('cheerio');
-            log.info('cheerio loaded successfully');
-        } catch (err) {
-            log.error('Failed to load cheerio:', err.message);
-            throw err;
-        }
-        
         const startUrl = `https://www.g2.com/products/${company_name}/reviews`;
         log.info(`Start URL: ${startUrl}`);
         
+        // Create proxy configuration
         let proxyConfiguration;
         try {
             proxyConfiguration = await Actor.createProxyConfiguration({
@@ -52,236 +33,302 @@ Actor.main(async () => {
             });
             log.info('Proxy configuration created');
         } catch (err) {
-            log.warning('Failed to create proxy configuration, continuing without proxy:', err.message);
+            log.warning('Failed to create proxy configuration, continuing without proxy');
             proxyConfiguration = null;
         }
         
         const reviews = [];
         let totalCollected = 0;
-        let page = 1;
-        const maxPages = Math.ceil(maxReviews / 10) + 1;
         
-        while (totalCollected < maxReviews && page <= maxPages) {
-            const url = page === 1 ? startUrl : `${startUrl}?page=${page}`;
-            log.info(`Scraping page ${page}: ${url}`);
-            
-            try {
-                const proxyUrl = proxyConfiguration ? await proxyConfiguration.newUrl() : undefined;
-                log.info(`Using proxy: ${proxyUrl ? 'YES' : 'NO'}`);
-                
-                // Add random delay between requests
-                if (page > 1) {
-                    const delay = 3000 + Math.random() * 4000;
-                    log.info(`Waiting ${Math.round(delay)}ms before next request...`);
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                }
-                
-                const response = await gotScraping({
-                    url,
-                    proxyUrl,
-                    timeout: { request: 60000 },
-                    retry: { limit: 3, methods: ['GET'] },
-                    http2: true,
-                    headerGeneratorOptions: {
-                        browsers: [
-                            { name: 'chrome', minVersion: 120, maxVersion: 130 },
-                            { name: 'firefox', minVersion: 120, maxVersion: 130 },
-                            { name: 'edge', minVersion: 120, maxVersion: 130 }
-                        ],
-                        devices: ['desktop'],
-                        operatingSystems: ['windows', 'macos', 'linux'],
-                        locales: ['en-US', 'en-GB'],
-                    },
-                    headers: {
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-                        'Accept-Language': 'en-US,en;q=0.9',
-                        'Accept-Encoding': 'gzip, deflate, br',
-                        'Cache-Control': 'max-age=0',
-                        'Sec-Ch-Ua': '"Chromium";v="120", "Not_A Brand";v="8", "Google Chrome";v="120"',
-                        'Sec-Ch-Ua-Mobile': '?0',
-                        'Sec-Ch-Ua-Platform': '"Windows"',
-                        'Sec-Fetch-Dest': 'document',
-                        'Sec-Fetch-Mode': 'navigate',
-                        'Sec-Fetch-Site': page === 1 ? 'none' : 'same-origin',
-                        'Sec-Fetch-User': page === 1 ? '?1' : undefined,
-                        'Upgrade-Insecure-Requests': '1',
-                        'Referer': page === 1 ? 'https://www.google.com/' : `https://www.g2.com/products/${company_name}/reviews`,
-                        'DNT': '1',
-                    },
-                });
-                
-                log.info(`Response status: ${response.statusCode}, Content-Type: ${response.headers['content-type']}`);
-                
-                if (response.statusCode === 403) {
-                    log.error('Got 403 Forbidden - G2.com is blocking requests');
-                    await Actor.setValue('BLOCKED_RESPONSE', {
-                        status: response.statusCode,
-                        headers: response.headers,
-                        bodyPreview: response.body.substring(0, 1000),
-                        url: url,
-                        page: page
+        const crawler = new PlaywrightCrawler({
+            proxyConfiguration,
+            maxRequestsPerCrawl: Math.ceil(maxReviews / 10) + 2,
+            navigationTimeoutSecs: 90,
+            requestHandlerTimeoutSecs: 180,
+            maxConcurrency: 1,
+            sessionPoolOptions: {
+                maxPoolSize: 1,
+                sessionRotationCount: 3,
+            },
+            launchContext: {
+                launchOptions: {
+                    headless: true,
+                    args: [
+                        '--disable-blink-features=AutomationControlled',
+                        '--disable-features=site-per-process',
+                        '--disable-dev-shm-usage',
+                        '--disable-setuid-sandbox',
+                        '--no-sandbox',
+                        '--disable-web-security',
+                        '--disable-features=VizDisplayCompositor',
+                    ],
+                },
+            },
+            preNavigationHooks: [
+                async ({ page }) => {
+                    // Remove automation indicators
+                    await page.evaluateOnNewDocument(() => {
+                        Object.defineProperty(navigator, 'webdriver', {
+                            get: () => undefined,
+                        });
+                        
+                        // Override chrome detection
+                        window.chrome = {
+                            runtime: {},
+                            loadTimes: function() {},
+                            csi: function() {}
+                        };
+                        
+                        // Override permissions
+                        const originalQuery = window.navigator.permissions.query;
+                        window.navigator.permissions.query = (parameters) => (
+                            parameters.name === 'notifications' ?
+                                Promise.resolve({ state: Notification.permission }) :
+                                originalQuery(parameters)
+                        );
+                        
+                        // Override plugins
+                        Object.defineProperty(navigator, 'plugins', {
+                            get: () => [1, 2, 3, 4, 5],
+                        });
                     });
                     
-                    // Try one more time with different headers after longer delay
-                    if (page === 1) {
-                        log.info('Retrying with different approach...');
-                        await new Promise(resolve => setTimeout(resolve, 5000));
-                        
-                        const retryResponse = await gotScraping({
-                            url,
-                            proxyUrl: proxyConfiguration ? await proxyConfiguration.newUrl() : undefined,
-                            timeout: { request: 30000 },
-                            retry: { limit: 1 },
-                            headers: {
-                                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                                'Accept-Language': 'en-US,en;q=0.5',
-                                'Connection': 'keep-alive',
-                                'Upgrade-Insecure-Requests': '1',
-                            },
+                    // Set realistic viewport
+                    await page.setViewportSize({ 
+                        width: 1366 + Math.floor(Math.random() * 200), 
+                        height: 768 + Math.floor(Math.random() * 200) 
+                    });
+                    
+                    // Set extra headers
+                    await page.setExtraHTTPHeaders({
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                        'Referer': 'https://www.google.com/',
+                    });
+                },
+            ],
+            requestHandler: async ({ request, page, log: crawlerLog }) => {
+                const currentPage = request.userData.page || 1;
+                crawlerLog.info(`Processing page ${currentPage} of ${company_name} reviews`);
+                
+                try {
+                    // Wait for page to load
+                    await page.waitForLoadState('networkidle', { timeout: 30000 });
+                    
+                    // Add human-like delay
+                    await page.waitForTimeout(2000 + Math.random() * 3000);
+                    
+                    // Scroll slowly to mimic human behavior
+                    await page.evaluate(async () => {
+                        await new Promise(resolve => {
+                            let totalHeight = 0;
+                            const distance = 100;
+                            const timer = setInterval(() => {
+                                window.scrollBy(0, distance);
+                                totalHeight += distance;
+                                
+                                if (totalHeight >= document.body.scrollHeight / 2) {
+                                    clearInterval(timer);
+                                    resolve();
+                                }
+                            }, 100);
                         });
-                        
-                        if (retryResponse.statusCode === 200) {
-                            response.statusCode = retryResponse.statusCode;
-                            response.body = retryResponse.body;
-                            log.info('Retry successful!');
-                        } else {
-                            throw new Error(`Still blocked after retry: HTTP ${retryResponse.statusCode}`);
+                    });
+                    
+                    await page.waitForTimeout(1000);
+                    
+                    // Try to find review cards with multiple selectors
+                    let reviewCardsFound = false;
+                    const selectors = [
+                        '[data-test="review-card"]',
+                        '.paper--white',
+                        '.review-card',
+                        '[class*="review"][class*="card"]',
+                        '.review',
+                        '[data-testid*="review"]'
+                    ];
+                    
+                    for (const selector of selectors) {
+                        try {
+                            await page.waitForSelector(selector, { timeout: 5000 });
+                            const count = await page.locator(selector).count();
+                            if (count > 0) {
+                                crawlerLog.info(`Found ${count} elements with selector: ${selector}`);
+                                reviewCardsFound = true;
+                                break;
+                            }
+                        } catch (err) {
+                            // Try next selector
                         }
-                    } else {
-                        throw new Error(`HTTP ${response.statusCode}: G2.com blocked the request`);
-                    }
-                }
-                
-                if (response.statusCode !== 200) {
-                    throw new Error(`HTTP ${response.statusCode}: ${response.statusMessage}`);
-                }
-                
-                const $ = cheerio.load(response.body);
-                
-                // Debug: Save page sample
-                if (page === 1) {
-                    await Actor.setValue('PAGE_SAMPLE', response.body.substring(0, 3000));
-                }
-                
-                // Try multiple selectors for review cards
-                let reviewCards = $('[data-test="review-card"]');
-                if (reviewCards.length === 0) {
-                    reviewCards = $('.paper--white');
-                }
-                if (reviewCards.length === 0) {
-                    reviewCards = $('.review-card');
-                }
-                if (reviewCards.length === 0) {
-                    reviewCards = $('[class*="review"][class*="card"]');
-                }
-                if (reviewCards.length === 0) {
-                    reviewCards = $('[data-testid*="review"]');
-                }
-                
-                log.info(`Found ${reviewCards.length} potential review cards on page ${page}`);
-                
-                if (reviewCards.length === 0) {
-                    log.warning('No review cards found. Checking page structure...');
-                    
-                    // Debug: Check what's actually on the page
-                    const pageTitle = $('title').text();
-                    const h1Text = $('h1').text();
-                    log.info(`Page title: "${pageTitle}", H1: "${h1Text}"`);
-                    
-                    // Look for any text that might indicate reviews
-                    const bodyText = $('body').text();
-                    const hasReviewText = bodyText.includes('review') || bodyText.includes('Review');
-                    log.info(`Page contains review text: ${hasReviewText}`);
-                    
-                    if (page === 1 && !hasReviewText) {
-                        log.error('This might not be a valid G2 reviews page or the page structure has changed');
                     }
                     
-                    break; // No reviews found, stop pagination
-                }
-                
-                let pageReviewCount = 0;
-                
-                reviewCards.each((index, element) => {
-                    if (totalCollected >= maxReviews) return false;
-                    
-                    const $card = $(element);
-                    
-                    // Try multiple selectors for title
-                    let title = $card.find('[data-test="review-card-title"]').first().text().trim();
-                    if (!title) title = $card.find('h3, h4, .h4').first().text().trim();
-                    if (!title) title = $card.find('[class*="title"]').first().text().trim();
-                    
-                    // Try multiple selectors for content
-                    let content = $card.find('[data-test="review-card-content"]').first().text().trim();
-                    if (!content) content = $card.find('.formatted-text').first().text().trim();
-                    if (!content) content = $card.find('.review-content, p').first().text().trim();
-                    if (!content) content = $card.find('[class*="content"]').first().text().trim();
-                    
-                    // Try to find rating
-                    let rating = null;
-                    const ratingEl = $card.find('[data-test="star-rating"], .stars, [data-rating]').first();
-                    if (ratingEl.length) {
-                        rating = ratingEl.attr('data-rating') || ratingEl.text().match(/\d+/)?.[0];
-                        if (rating) rating = Number(rating);
-                    }
-                    
-                    // Try to find reviewer name
-                    let reviewerName = $card.find('[data-test="reviewer-display-name"]').first().text().trim();
-                    if (!reviewerName) reviewerName = $card.find('a[href*="/users/"]').first().text().trim();
-                    if (!reviewerName) reviewerName = $card.find('.link--header').first().text().trim();
-                    
-                    // Only add if we have meaningful content
-                    if (title || content) {
-                        reviews.push({
-                            review_id: totalCollected + 1,
-                            review_title: title || null,
-                            review_content: content || null,
-                            review_rating: rating,
-                            reviewer_name: reviewerName || null,
-                            page_found: page,
-                            scraped_from: 'got-scraping',
-                            scraped_at: new Date().toISOString()
+                    if (!reviewCardsFound) {
+                        crawlerLog.warning('No review cards found with any selector');
+                        
+                        // Debug: Check page content
+                        const pageTitle = await page.title();
+                        const url = page.url();
+                        crawlerLog.info(`Page title: "${pageTitle}", URL: ${url}`);
+                        
+                        // Save page content for debugging
+                        const htmlContent = await page.content();
+                        await Actor.setValue(`DEBUG_PAGE_${currentPage}`, htmlContent, { 
+                            contentType: 'text/html' 
                         });
-                        totalCollected++;
-                        pageReviewCount++;
+                        
+                        // Check for common blocking indicators
+                        const pageText = await page.evaluate(() => document.body.innerText.toLowerCase());
+                        if (pageText.includes('captcha') || pageText.includes('blocked') || pageText.includes('bot')) {
+                            crawlerLog.error('Detected blocking page');
+                        }
+                        
+                        return;
                     }
-                });
-                
-                log.info(`Extracted ${pageReviewCount} valid reviews from page ${page}, total: ${totalCollected}`);
-                
-                // Check if there are more pages
-                if (totalCollected < maxReviews) {
-                    const hasNextPage = $('.pagination a[rel="next"]').length > 0 && 
-                                       !$('.pagination a[rel="next"]').hasClass('disabled');
                     
-                    if (!hasNextPage) {
-                        log.info('No more pages available');
-                        break;
+                    // Extract reviews
+                    const pageReviews = await page.evaluate(() => {
+                        const reviewsData = [];
+                        
+                        // Try multiple selectors for review cards
+                        let reviewCards = document.querySelectorAll('[data-test="review-card"]');
+                        if (reviewCards.length === 0) {
+                            reviewCards = document.querySelectorAll('.paper--white');
+                        }
+                        if (reviewCards.length === 0) {
+                            reviewCards = document.querySelectorAll('.review-card, [class*="review"][class*="card"]');
+                        }
+                        
+                        reviewCards.forEach((card, index) => {
+                            try {
+                                // Extract review link and ID
+                                const reviewLinkEl = card.querySelector('a[data-test="review-card-link"], a[href*="/reviews/"]');
+                                const reviewLink = reviewLinkEl ? reviewLinkEl.getAttribute('href') : '';
+                                const reviewIdMatch = reviewLink.match(/-(\d+)$/);
+                                
+                                // Extract title with multiple fallback selectors
+                                let title = null;
+                                const titleSelectors = [
+                                    '[data-test="review-card-title"]',
+                                    'h3', 'h4', '.h4',
+                                    '[class*="title"]',
+                                    'a[href*="/reviews/"]'
+                                ];
+                                for (const sel of titleSelectors) {
+                                    const el = card.querySelector(sel);
+                                    if (el && el.textContent.trim()) {
+                                        title = el.textContent.trim();
+                                        break;
+                                    }
+                                }
+                                
+                                // Extract content with multiple fallback selectors  
+                                let content = null;
+                                const contentSelectors = [
+                                    '[data-test="review-card-content"]',
+                                    '.formatted-text',
+                                    '.review-content',
+                                    'p',
+                                    '[class*="content"]'
+                                ];
+                                for (const sel of contentSelectors) {
+                                    const el = card.querySelector(sel);
+                                    if (el && el.textContent.trim()) {
+                                        content = el.textContent.trim();
+                                        break;
+                                    }
+                                }
+                                
+                                // Extract rating
+                                const ratingEl = card.querySelector('[data-test="star-rating"], .stars, [data-rating]');
+                                let rating = null;
+                                if (ratingEl) {
+                                    rating = ratingEl.getAttribute('data-rating') || 
+                                            ratingEl.textContent.match(/\d+/)?.[0];
+                                    if (rating) rating = Number(rating);
+                                }
+                                
+                                // Extract reviewer info
+                                const nameEl = card.querySelector('[data-test="reviewer-display-name"], .link--header, a[href*="/users/"]');
+                                const jobEl = card.querySelector('[data-test="reviewer-job-title"], .mt-4th');
+                                const sizeEl = card.querySelector('[data-test="reviewer-company-size"], .company-size');
+                                const dateEl = card.querySelector('time, [datetime]');
+                                
+                                // Only add if we have meaningful content
+                                if (title || content) {
+                                    reviewsData.push({
+                                        review_id: reviewIdMatch ? Number(reviewIdMatch[1]) : (index + 1),
+                                        review_title: title,
+                                        review_content: content,
+                                        review_rating: rating,
+                                        reviewer: {
+                                            reviewer_name: nameEl ? nameEl.textContent.trim() : null,
+                                            reviewer_job_title: jobEl ? jobEl.textContent.trim() : null,
+                                            reviewer_link: nameEl && nameEl.getAttribute('href') ? 
+                                                `https://www.g2.com${nameEl.getAttribute('href')}` : null,
+                                        },
+                                        publish_date: dateEl ? dateEl.getAttribute('datetime') : null,
+                                        reviewer_company_size: sizeEl ? sizeEl.textContent.trim() : null,
+                                        review_link: reviewLink ? `https://www.g2.com${reviewLink}` : null,
+                                        scraped_from: 'playwright',
+                                        page_number: currentPage
+                                    });
+                                }
+                            } catch (error) {
+                                console.log('Error extracting review:', error);
+                            }
+                        });
+                        
+                        return reviewsData;
+                    });
+                    
+                    // Filter and add valid reviews
+                    const validReviews = pageReviews.slice(0, maxReviews - totalCollected);
+                    reviews.push(...validReviews);
+                    totalCollected = reviews.length;
+                    
+                    crawlerLog.info(`Found ${validReviews.length} reviews on page ${currentPage}, total: ${totalCollected}`);
+                    
+                    // Check if we need more reviews and there's a next page
+                    if (totalCollected < maxReviews) {
+                        const hasNextPage = await page.evaluate(() => {
+                            const nextButton = document.querySelector('a[aria-label*="Next"], .pagination a[rel="next"], a[href*="page="]');
+                            return nextButton && !nextButton.classList.contains('disabled') && 
+                                   !nextButton.hasAttribute('disabled');
+                        });
+                        
+                        if (hasNextPage) {
+                            const nextPageUrl = `${startUrl}?page=${currentPage + 1}`;
+                            await crawler.addRequests([{
+                                url: nextPageUrl,
+                                userData: { page: currentPage + 1 }
+                            }]);
+                            crawlerLog.info(`Added next page: ${nextPageUrl}`);
+                        } else {
+                            crawlerLog.info('No more pages available');
+                        }
                     }
-                } else {
-                    log.info('Reached maximum number of reviews');
-                    break;
+                    
+                } catch (error) {
+                    crawlerLog.error(`Error processing page ${currentPage}: ${error.message}`);
+                    
+                    // Save error page for debugging
+                    try {
+                        const html = await page.content();
+                        await Actor.setValue(`ERROR_PAGE_${currentPage}`, html, { 
+                            contentType: 'text/html' 
+                        });
+                    } catch (saveError) {
+                        crawlerLog.warning('Could not save error page');
+                    }
                 }
-                
-            } catch (error) {
-                log.error(`Failed to scrape page ${page}: ${error.message}`);
-                
-                if (error.message.includes('403') || error.message.includes('blocked')) {
-                    log.error('G2.com is blocking requests. Consider using a different approach or Playwright.');
-                    break;
-                } else if (page === 1) {
-                    // If first page fails for other reasons, still throw
-                    throw error;
-                } else {
-                    // For subsequent pages, log error but continue
-                    log.warning(`Skipping page ${page} due to error: ${error.message}`);
-                }
-            }
-            
-            page++;
-        }
+            },
+        });
+        
+        await crawler.run([{
+            url: startUrl,
+            userData: { page: 1 }
+        }]);
         
         // Save results
         log.info(`Successfully scraped ${reviews.length} reviews for ${company_name}`);
@@ -296,7 +343,7 @@ Actor.main(async () => {
             reviews: reviews,
             scraped_at: new Date().toISOString(),
             success: true,
-            method_used: 'got-scraping'
+            method_used: 'playwright'
         });
         
         log.info('Actor completed successfully');
