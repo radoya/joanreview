@@ -201,33 +201,85 @@ Actor.main(async () => {
             }]);
             
         } else {
-            // Fallback to got-scraping
-            log.info('Using got-scraping...');
+            // Fallback to got-scraping with enhanced anti-detection
+            log.info('Using got-scraping with enhanced headers...');
             
             try {
                 const proxyUrl = proxyConfiguration ? await proxyConfiguration.newUrl() : undefined;
+                log.info(`Using proxy: ${proxyUrl ? 'YES' : 'NO'}`);
+                
+                // Add random delay to seem more human-like
+                await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
                 
                 const response = await gotScraping({
                     url: startUrl,
                     proxyUrl,
-                    timeout: { request: 30000 },
-                    retry: { limit: 2 },
+                    timeout: { request: 60000 },
+                    retry: { limit: 3 },
+                    http2: true,
+                    headerGeneratorOptions: {
+                        browsers: [
+                            { name: 'chrome', minVersion: 120, maxVersion: 130 },
+                            { name: 'edge', minVersion: 120, maxVersion: 130 }
+                        ],
+                        devices: ['desktop'],
+                        operatingSystems: ['windows', 'macos'],
+                        locales: ['en-US'],
+                    },
+                    headers: {
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'Cache-Control': 'no-cache',
+                        'Pragma': 'no-cache',
+                        'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+                        'Sec-Ch-Ua-Mobile': '?0',
+                        'Sec-Ch-Ua-Platform': '"Windows"',
+                        'Sec-Fetch-Dest': 'document',
+                        'Sec-Fetch-Mode': 'navigate',
+                        'Sec-Fetch-Site': 'none',
+                        'Sec-Fetch-User': '?1',
+                        'Upgrade-Insecure-Requests': '1',
+                        'Referer': 'https://www.google.com/',
+                    },
                 });
                 
+                log.info(`Response status: ${response.statusCode}`);
+                
                 if (response.statusCode !== 200) {
+                    if (response.statusCode === 403) {
+                        log.warning('Got 403 - G2.com is blocking the request. Try using Playwright instead.');
+                        // Save the response for debugging
+                        await Actor.setValue('BLOCKED_RESPONSE', {
+                            status: response.statusCode,
+                            headers: response.headers,
+                            body: response.body.substring(0, 1000),
+                            url: startUrl
+                        });
+                    }
                     throw new Error(`HTTP ${response.statusCode}: ${response.statusMessage}`);
                 }
                 
                 const $ = cheerio.load(response.body);
-                const reviewCards = $('[data-test="review-card"], .paper--white, .review-card');
                 
+                // Save a sample of the page for debugging
+                await Actor.setValue('PAGE_SAMPLE', response.body.substring(0, 2000));
+                
+                const reviewCards = $('[data-test="review-card"], .paper--white, .review-card');
                 log.info(`Found ${reviewCards.length} review cards with got-scraping`);
+                
+                if (reviewCards.length === 0) {
+                    log.warning('No review cards found. Page might require JavaScript or have different selectors.');
+                    // Try alternative selectors
+                    const alternativeCards = $('.review, [class*="review"], [data-testid*="review"]');
+                    log.info(`Found ${alternativeCards.length} alternative review elements`);
+                }
                 
                 reviewCards.each((index, element) => {
                     if (totalCollected >= maxReviews) return false;
                     
                     const $card = $(element);
-                    const title = $card.find('h3, h4, .h4').first().text().trim() || `Review ${index + 1}`;
+                    const title = $card.find('h3, h4, .h4, [data-test*="title"]').first().text().trim() || `Review ${index + 1}`;
                     const content = $card.find('.formatted-text, .review-content, p').first().text().trim();
                     
                     if (title || content) {
@@ -243,7 +295,79 @@ Actor.main(async () => {
                 
             } catch (error) {
                 log.error(`got-scraping failed: ${error.message}`);
-                throw error;
+                
+                // If got-scraping fails, automatically fall back to Playwright
+                if (error.message.includes('403') || error.message.includes('blocked')) {
+                    log.info('Automatically switching to Playwright due to blocking...');
+                    
+                    const PlaywrightCrawler = (await import('crawlee')).PlaywrightCrawler;
+                    
+                    const crawler = new PlaywrightCrawler({
+                        proxyConfiguration,
+                        maxRequestsPerCrawl: 1,
+                        navigationTimeoutSecs: 60,
+                        requestHandlerTimeoutSecs: 120,
+                        maxConcurrency: 1,
+                        launchContext: {
+                            launchOptions: {
+                                headless: true,
+                                args: [
+                                    '--disable-blink-features=AutomationControlled',
+                                    '--disable-dev-shm-usage',
+                                    '--disable-setuid-sandbox',
+                                    '--no-sandbox',
+                                ],
+                            },
+                        },
+                        requestHandler: async ({ page, log: crawlerLog }) => {
+                            crawlerLog.info('Fallback Playwright processing...');
+                            
+                            try {
+                                await page.waitForSelector('body', { timeout: 30000 });
+                                await page.waitForTimeout(3000); // Wait for dynamic content
+                                
+                                const pageReviews = await page.evaluate(() => {
+                                    const reviewsData = [];
+                                    const cards = document.querySelectorAll('[data-test="review-card"], .paper--white, .review-card, .review, [class*="review"]');
+                                    
+                                    cards.forEach((card, index) => {
+                                        const titleEl = card.querySelector('h3, h4, .h4, [data-test*="title"], [class*="title"]');
+                                        const contentEl = card.querySelector('.formatted-text, .review-content, p, [class*="content"]');
+                                        
+                                        const title = titleEl ? titleEl.textContent.trim() : `Review ${index + 1}`;
+                                        const content = contentEl ? contentEl.textContent.trim() : '';
+                                        
+                                        if (title || content) {
+                                            reviewsData.push({
+                                                review_id: index + 1,
+                                                review_title: title,
+                                                review_content: content,
+                                                scraped_from: 'playwright_fallback'
+                                            });
+                                        }
+                                    });
+                                    
+                                    return reviewsData;
+                                });
+                                
+                                const validReviews = pageReviews.slice(0, maxReviews);
+                                reviews.push(...validReviews);
+                                totalCollected = reviews.length;
+                                
+                                crawlerLog.info(`Playwright fallback found ${validReviews.length} reviews`);
+                                
+                            } catch (fallbackError) {
+                                crawlerLog.error(`Playwright fallback also failed: ${fallbackError.message}`);
+                                throw fallbackError;
+                            }
+                        },
+                    });
+                    
+                    await crawler.run([{ url: startUrl }]);
+                    
+                } else {
+                    throw error;
+                }
             }
         }
         
