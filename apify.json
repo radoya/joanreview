@@ -1,10 +1,8 @@
 {
-    "name": "joanreview",
-    "title": "Joan Review",
-    "description": "Scrapes reviews from G2 for a given company and returns structured JSON.",
-    "version": "1.0",
-    "dockerfile": "./Dockerfile",
-    "input": "./input_schema.json",
-    "readme": "./README.md"
+  "dependencies": {
+    "apify": "^3.0.0",
+    "crawlee": "^3.0.0",
+    "got-scraping": "^3.2.0",
+    "cheerio": "^1.0.0"
   }
-  
+}
