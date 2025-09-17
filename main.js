@@ -2,7 +2,7 @@ import { Actor } from 'apify';
 import * as cheerio from 'cheerio';
 import { gotScraping } from 'got-scraping';
 import { chromium } from 'playwright-extra';
-import stealthPlugin from 'playwright-extra-plugin-stealth';
+import stealthPlugin from 'puppeteer-extra-plugin-stealth';
 
 chromium.use(stealthPlugin());
 
