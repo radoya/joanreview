@@ -28,7 +28,8 @@ Actor.main(async () => {
         const response = await gotScraping({
             url,
             proxyUrl,
-            http2: true,
+            http2: false, // Disable HTTP/2 to avoid some anti-bot triggers
+            retry: { limit: 3 }, // Retry on failures
             timeout: { request: 30000 },
             headerGeneratorOptions: {
                 browsers: [
