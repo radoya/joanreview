@@ -9,7 +9,7 @@ Actor.main(async () => {
     }
 
     const reviews = [];
-    const proxyConfiguration = await Actor.newProxyConfiguration();
+    const proxyConfiguration = await Actor.createProxyConfiguration();
     const proxyUrl = proxyConfiguration ? await proxyConfiguration.newUrl() : undefined;
     let page = 1;
     let totalCollected = 0;
