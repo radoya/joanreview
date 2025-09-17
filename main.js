@@ -17,17 +17,33 @@ Actor.main(async () => {
         const url = `https://www.g2.com/products/${company_name}/reviews?page=${page}`;
         const response = await fetch(url, {
             headers: {
-                'User-Agent': 'Mozilla/5.0',
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': `https://www.g2.com/products/${company_name}`,
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Site': 'same-origin',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Dest': 'document',
             },
         });
 
-        if (!response.ok) break;
+        if (!response.ok) {
+            const body = await response.text();
+            await Actor.setValue(`ERROR_PAGE_${company_name}_p${page}`, body, { contentType: 'text/html' });
+            console.log(`Request failed ${response.status} for ${url}`);
+            break;
+        }
 
         const html = await response.text();
         const $ = cheerio.load(html);
 
         const reviewCards = $('[data-test="review-card"]');
         if (reviewCards.length === 0) {
+            if (page === 1) {
+                await Actor.setValue(`EMPTY_PAGE_${company_name}_p${page}`, html, { contentType: 'text/html' });
+                console.log(`No review cards found on first page: ${url}`);
+            }
             hasMore = false;
             break;
         }
