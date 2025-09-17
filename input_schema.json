@@ -1,0 +1,23 @@
+{
+    "title": "G2 Reviews Actor",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+      "company_name": {
+        "title": "Company Name",
+        "type": "string",
+        "description": "The company slug from G2 URL. Example: 'hubspot' or 'joan'.",
+        "editor": "textfield"
+      },
+      "maxReviews": {
+        "title": "Maximum Reviews",
+        "type": "integer",
+        "description": "How many reviews to scrape",
+        "default": 20,
+        "minimum": 1,
+        "maximum": 1000
+      }
+    },
+    "required": ["company_name"]
+  }
+  
